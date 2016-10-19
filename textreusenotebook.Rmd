@@ -1,0 +1,218 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tokenizers)
+library(text2vec)
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(forcats)
+library(ggplot2)
+library(glmnet)
+library(doParallel)
+library(Matrix)
+library(broom)
+library(tidyr)
+library(tibble)
+library(devtools)
+library(wordVectors)
+library(ggrepel)
+library(apcluster)
+library(caret)
+library(tidyverse)
+library(textreuse)
+```
+
+```{r}
+
+# Code to clean meta data
+
+us_items <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-items.csv",
+                     col_types = cols(
+  .default = col_character(),
+  document_id = col_character(),
+  publication_date = col_date(format = ""),
+  release_date = col_date(format = ""),
+  volume_current = col_integer(),
+  volume_total = col_integer(),
+  page_count = col_integer()
+))
+
+us_authors <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-authors.csv", 
+                       col_types = cols(
+  document_id = col_character(),
+  author = col_character(),
+  birth_year = col_character(),
+  death_year = col_integer(),
+  marc_dates = col_character(),
+  byline = col_character()
+))
+
+us_subjects <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-subjects.csv", col_types = cols(
+  document_id = col_character(),
+  subject_source = col_character(),
+  subject_type = col_character(),
+  subject = col_character()
+))
+
+us_authors <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-authors.csv",
+                       col_types = cols(.default = col_character()))
+
+get_year <- function(x) { as.integer(str_extract(x, "\\d{4}")) }
+
+
+pick <- function(x, y) { ifelse(!is.na(x), x, y) }
+
+us_authors <- us_authors %>%
+  mutate(birth_year = get_year(birth_year),
+         death_year = get_year(death_year),
+         creator = pick(author, byline))
+
+us_subjects_moml <- us_subjects %>%
+  filter(subject_source == "MOML",
+         subject != "US") %>%
+  distinct(document_id, subject)
+
+us_subjects_loc <- us_subjects %>%
+  filter(subject_source == "LOC")
+
+rm(us_subjects)
+
+us_items <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-items.csv",
+                     col_types = cols(
+                         .default = col_character(),
+                         publication_date = col_date(format = ""),
+                         release_date = col_date(format = ""),
+                         volume_current = col_integer(),
+                         volume_total = col_integer(),
+                         page_count = col_integer()
+                       ))
+
+clean_place <- function(x) {
+  str_split(x, ",", n = 2) %>%
+    map_chr(1) %>%
+    str_replace_all("[[:punct:]]", "")
+}
+
+us_items <- us_items %>%
+  mutate(city = clean_place(imprint_city),
+         city = fct_recode(city,
+                           "Unknown" = "Sl",
+                           "Unknown" = "US",
+                           "New York" = "NewYork",
+                           "Boston" = "Boston New York",
+                           "Cambridge" = "Cambridge Mass",
+                           "New York" = "New York City",
+                           "Washington" = "Washington DC"),
+         publication_year = lubridate::year(publication_date)) %>%
+  filter(publication_year > 1795,
+         publication_year < 1925)
+
+```
+
+This text reuse notebook is using document level data not pages or paragraphs.
+```{r}
+files <- list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
+                   pattern = "*.txt",
+                   full.names = TRUE)
+```
+
+I was unable to create my corpus using the `dir` function as it returned an error message about character strings.
+
+```
+dir <- list.files("list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
+                   pattern = "*.txt",
+                   full.names = TRUE)
+corpus <- TextReuseCorpus(dir = dir, tokenizer = tokenize_ngrams, n = 5,
+                          progress = FALSE)
+                          ```
+
+The textreuse vignette https://github.com/ropensci/textreuse/blob/master/vignettes/textreuse-introduction.Rmd stated that the corpus could be created using a directory of files, so I chose this method. 
+```{r createcorpus, cache=TRUE}
+corpus <- TextReuseCorpus(list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
+                   pattern = "*.txt",
+                   full.names = TRUE), tokenizer = tokenize_ngrams, n = 5,
+                          progress = FALSE)
+#This resulted in the following documents being skipped because they had too few words to create at least two n-grams with n=5: '19002548900', '20001390400', '20002772300'.
+```
+ 
+
+Next, I created a Pairwise comparison. 
+```{r createcomparisons, cache=TRUE}
+comparisons <- pairwise_compare(corpus, jaccard_similarity, progress = FALSE)
+comparisons[1:4, 1:4]
+#Rounding did not work
+#comparisons <- pairwise_compare(corpus, jaccard_similarity, progress = FALSE)
+#round(comparisons[1:3, 1:3], digits = 3)
+
+```
+
+Here the matrix is converted to a data frame and only the results with a score greater than 0.1 are kept. 
+```{r}
+candidates <- pairwise_candidates(comparisons)
+candidates[candidates$score > 0.1, ]
+
+
+```
+
+
+Minhash & Locality-sensitive hashing
+
+The `pairwise` approach can be time consuming due to the number of comparisons. However, not all of the comparisons are useful and therefore need not be generated (this includes texts matched against themselves). Therefore, using a combination of Minhash & Locality-sensitive hashing can be more effective. 
+
+```{r}
+minhash <- minhash_generator(n = 240, seed = 3552)
+head(minhash(c("turn tokens into", "tokens into hashes", "into hashes fast")))
+```
+
+
+Now the corpus needs to be loaded using the `minhash` function. This creates a corpus with minhashes. It is also necessary to create a minhash signature by passing our minhash function to the minhash_func = parameter. 
+
+```{r createcorpus2, cache=TRUE}
+corpus2 <- TextReuseCorpus(list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
+                   pattern = "*.txt",
+                   full.names = TRUE), tokenizer = tokenize_ngrams, n = 5,
+                          minhash_func = minhash, keep_tokens = TRUE,
+                          progress = FALSE)
+
+#The following documents were skipped because they has too few words to create at least two n-grams with n = 5: '19002548900', '20001390400', '20002772300'
+```
+
+
+```{r}
+head(minhashes(corpus2[[1]]))
+length(minhashes(corpus2[[1]]))
+```
+
+```{r}
+lsh_threshold(h = 100, b = 50)
+
+```
+```{r}
+buckets <- lsh(corpus2, bands = 80, progress = FALSE)
+buckets
+```
+```{r}
+baxter_matches <- lsh_query(buckets, "19000630400")
+baxter_matches
+candidates <- lsh_candidates(buckets)
+candidates
+```
+
+```{r}
+lsh_compare(candidates, corpus, jaccard_similarity, progress = FALSE)
+
+similarities <-lsh_compare(candidates, corpus, jaccard_similarity, progress = FALSE)
+```
+
+```{r}
+hist(similarities$score, breaks = 100)
+```
+```{r}
+THRESHOLD <- 0.2
+```
+
