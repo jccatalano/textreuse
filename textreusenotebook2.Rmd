@@ -208,7 +208,7 @@ lsh_compare(candidates, corpus, jaccard_similarity, progress = FALSE)
 
 similarities <-lsh_compare(candidates, corpus, jaccard_similarity, progress = FALSE)
 ```
-Histogram of similarities
+Histogram of similarities 
 ```{r} 
 hist(similarities$score, breaks = 100) 
 ```
