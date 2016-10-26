@@ -1,0 +1,263 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r}
+library(tokenizers)
+library(text2vec)
+library(readr)
+library(dplyr)
+library(stringr)
+library(purrr)
+library(forcats)
+library(ggplot2)
+library(glmnet)
+library(doParallel)
+library(Matrix)
+library(broom)
+library(tidyr)
+library(tibble)
+library(devtools)
+library(wordVectors)
+library(ggrepel)
+library(apcluster)
+library(caret)
+library(tidyverse)
+library(textreuse)
+library(devtools)
+```
+
+```{r}
+us_items <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-items.csv",
+                     col_types = cols(
+  .default = col_character(),
+  document_id = col_character(),
+  publication_date = col_date(format = ""),
+  release_date = col_date(format = ""),
+  volume_current = col_integer(),
+  volume_total = col_integer(),
+  page_count = col_integer()
+))
+
+us_authors <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-authors.csv", 
+                       col_types = cols(
+  document_id = col_character(),
+  author = col_character(),
+  birth_year = col_character(),
+  death_year = col_integer(),
+  marc_dates = col_character(),
+  byline = col_character()
+))
+
+us_subjects <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-subjects.csv", col_types = cols(
+  document_id = col_character(),
+  subject_source = col_character(),
+  subject_type = col_character(),
+  subject = col_character()
+))
+
+us_authors <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-authors.csv",
+                       col_types = cols(.default = col_character()))
+
+get_year <- function(x) { as.integer(str_extract(x, "\\d{4}")) }
+
+
+pick <- function(x, y) { ifelse(!is.na(x), x, y) }
+
+us_authors <- us_authors %>%
+  mutate(birth_year = get_year(birth_year),
+         death_year = get_year(death_year),
+         creator = pick(author, byline))
+
+us_subjects_moml <- us_subjects %>%
+  filter(subject_source == "MOML",
+         subject != "US") %>%
+  distinct(document_id, subject)
+
+us_subjects_loc <- us_subjects %>%
+  filter(subject_source == "LOC")
+
+rm(us_subjects)
+
+us_items <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-items.csv",
+                     col_types = cols(
+                         .default = col_character(),
+                         publication_date = col_date(format = ""),
+                         release_date = col_date(format = ""),
+                         volume_current = col_integer(),
+                         volume_total = col_integer(),
+                         page_count = col_integer()
+                       ))
+
+clean_place <- function(x) {
+  str_split(x, ",", n = 2) %>%
+    map_chr(1) %>%
+    str_replace_all("[[:punct:]]", "")
+}
+
+us_items <- us_items %>%
+  mutate(city = clean_place(imprint_city),
+         city = fct_recode(city,
+                           "Unknown" = "Sl",
+                           "Unknown" = "US",
+                           "New York" = "NewYork",
+                           "Boston" = "Boston New York",
+                           "Cambridge" = "Cambridge Mass",
+                           "New York" = "New York City",
+                           "Washington" = "Washington DC"),
+         publication_year = lubridate::year(publication_date)) %>%
+  filter(publication_year > 1795,
+         publication_year < 1925)
+
+```
+
+In this notebook, I am going to explore the tort data and compare it to the railroad data. My goal is to check for similarity. In order to do this, I am going to combine the two sets of data and check for clusters. 
+
+
+First I need to load my tort data.
+```{r}
+tort_par <- read_csv("C:/Users/Joshua/Documents/rdata/data/torts-paragraphs.csv",
+            col_types = cols(
+              .default = col_character(),
+              page_id = col_character(),
+              record_id = col_character(),
+              para_num = col_character()
+))
+```
+
+
+This is organized by the paragraph level, so it needs organized by the document level.
+```{r}
+tort_doc <- tort_par %>%
+  group_by(document_id) %>%
+  summarize(text = str_c(text, collapse = " "))
+```
+
+Now I need to create individual files out of each line. First I am going to create a csv of my data at the document level.
+# write.csv(tort_doc, file = "tort_doc.csv")
+Then I needed to create multiple text files out of that csv.I used code found online for the function [csv2txt](https://gist.github.com/benmarwick/9266072#file-csv2txts-r): 
+#csv2txt("C:/Users/Joshua/Documents/rdata/tortdata", labels = 2).
+
+This created an individual text file for each document.
+
+Next, I loaded the tort and railroad data and combined them.
+
+```{r}
+tort_files <- list.files("C:/Users/Joshua/Documents/rdata/tortdata", 
+                   pattern = "*.txt",
+                   full.names = TRUE)
+
+tort_files
+rr_files <- list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
+                   pattern = "*.txt",
+                   full.names = TRUE)
+
+
+comb_files <- c(rr_files,tort_files)
+```
+The next step was tokenization. 
+```{r createvocab, cache=TRUE}
+reader <- function(f) {
+  require(stringr)
+  n <- basename(f) %>% str_replace("\\.txt", "")
+  doc <- readr::read_file(f)
+  names(doc) <- n
+  doc
+}
+
+it_files <- ifiles(comb_files, reader = reader)
+it_tokens <- itoken(it_files,
+                   tokenizer = tokenizers::tokenize_words)
+
+vocab <- create_vocabulary(it_tokens)
+pruned_vocab <- prune_vocabulary(vocab, term_count_min = 10,
+term_count_max = 50000)
+vectorizer <- vocab_vectorizer(pruned_vocab)
+
+dtm <- create_dtm(it_tokens, vectorizer)
+rownames(dtm) <- basename(comb_files)
+comb_files
+```
+After creating the dtm, I examined the cosinesimilarity. The histogram shows that the similarity is pretty high. 
+```{r}
+distances <- dist2(dtm[1, , drop = FALSE], dtm[1:367, ])
+distances2 <- distances[1, ] %>% sort()
+head(distances2)
+tail(distances2)
+range(distances2)
+
+similarities <- wordVectors::cosineSimilarity(dtm[1:367, , drop = FALSE], 
+                                              dtm[1:367, , drop = FALSE])
+similarities %>% View
+
+
+
+```
+
+Performing a principle component analysis. 
+```{r}
+dtm2 <- as.matrix(dtm)
+
+pca <- prcomp(dtm2, scale. = FALSE)
+plot(pca)
+augment(pca) %>% select(1:6) %>% as_tibble() %>% View
+
+augment(pca) %>%
+ggplot(aes(.fittedPC1, .fittedPC2)) + 
+geom_point() 
+```
+
+Now I will see if using Kmeans reveals anything.Here I used two clusters to see if it would divide evenly between railroads and torts.This resulted in one cluster having 118 documents and the other 249. This indicates that there is some overlap as there are only 70 tort documents. 
+To check, I needed to compare the 118 files in cluster 1 with the 70 tort documents.
+
+However, this revealed that the dtm files still contained the .txt extension. So I removed that and tried comparing the vectors containing the file names using == but that yeidled only one result.
+
+That seemed odd so I tried using %in% and that yeilded 42 matches. This means that 42 tort documents are included in kluster 1 and 28 tort documents were clustered with railroad documents instead. Although this is not definative, it does show that some tort documents more closely resembled railraod documents. 
+
+This also indicates that the opposite is true. If there were 118 documents in cluster 1 and only 42 of them were tort documents, then 76 railroad documents were clustered with tort documents. 
+
+```{r}
+#  Kmeans
+km <- kmeans(dtm, centers = 2)
+
+k_clusters <- tibble(document_id = rownames(dtm),
+                     cluster = km$cluster) %>% 
+  left_join(us_items, by = "document_id")
+
+k_clusters %>% arrange(cluster) %>% View
+
+k1 <- k_clusters %>% filter(cluster == 1)
+
+
+k1vector <- c(k1$document_id)
+           
+k1vector <- strsplit(k1vector, "\\.txt")
+
+tortvector <- c(tort_doc$document_id)
+
+
+tortvector == k1vector 
+
+matches <- (which(tortvector%in%k1vector))
+
+tortvectorm <- tortvector[c(matches)]
+
+mixedup <- (which(!tortvector%in%k1vector))
+
+tortvectormx <- tortvector[c(mixedup)]
+```
+Affinity propogation clustering. 
+```{r}
+# Affinity propagation clustering
+
+clu <- apcluster(negDistMat(r = 2), dtm2, details = TRUE)
+ap_clusters <- clu@clusters 
+names(ap_clusters) <- names(clu@exemplars)
+ap_clusters <- lapply(ap_clusters, names)
+ap_clusters <- map_df(names(ap_clusters), function(x) {
+  tibble(exemplar = x, document_id = ap_clusters[[x]])
+})
+ap_clusters %>% left_join(us_items, by = "document_id") %>% View
+```
+
