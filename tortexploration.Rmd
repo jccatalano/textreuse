@@ -148,11 +148,18 @@ tort_files <- list.files("C:/Users/Joshua/Documents/rdata/tortdata",
                    pattern = "*.txt",
                    full.names = TRUE)
 
-tort_files
+
 rr_files <- list.files("C:/Users/Joshua/Documents/rdata/railroaddata/railroads_documents", 
                    pattern = "*.txt",
                    full.names = TRUE)
 
+rr_filesnotxt <- sapply(rr_files, FUN = function(eachPath) {file.rename(from = eachPath, to = sub(pattern = ".txt", replacement = "", eachPath))})
+
+
+rr_filesnotxt <- str_replace(rr_files, "\\.txt", "")
+
+
+basename(comb_files)
 
 comb_files <- c(rr_files,tort_files)
 ```
