@@ -2,7 +2,10 @@
 title: "R Notebook"
 output: html_notebook
 ---
+#An Exploration of Tort & Railroad Law 
+In this notebook, I am going to explore the tort data and compare it to the railroad data. My goal is to check for similarity. In order to do this, I am going to combine the two sets of data and check for clusters. 
 
+##Libraries
 ```{r}
 library(tokenizers)
 library(text2vec)
@@ -27,7 +30,7 @@ library(tidyverse)
 library(textreuse)
 library(devtools)
 ```
-
+#Metadata Cleaning
 ```{r}
 us_items <- read_csv("C:/Users/Joshua/Documents/rdata/data/us-items.csv",
                      col_types = cols(
@@ -112,8 +115,8 @@ us_items <- us_items %>%
 
 ```
 
-In this notebook, I am going to explore the tort data and compare it to the railroad data. My goal is to check for similarity. In order to do this, I am going to combine the two sets of data and check for clusters. 
 
+##Loading Files
 
 First I need to load my tort data.
 ```{r}
@@ -125,9 +128,10 @@ tort_par <- read_csv("C:/Users/Joshua/Documents/rdata/data/torts-paragraphs.csv"
               para_num = col_character()
 ))
 ```
-
+###Manipulating Files to Load
 
 This is organized by the paragraph level, so it needs organized by the document level.
+
 ```{r}
 tort_doc <- tort_par %>%
   group_by(document_id) %>%
@@ -135,9 +139,9 @@ tort_doc <- tort_par %>%
 ```
 
 Now I need to create individual files out of each line. First I am going to create a csv of my data at the document level.
-# write.csv(tort_doc, file = "tort_doc.csv")
+[ write.csv(tort_doc, file = "tort_doc.csv") ]
 Then I needed to create multiple text files out of that csv.I used code found online for the function [csv2txt](https://gist.github.com/benmarwick/9266072#file-csv2txts-r): 
-#csv2txt("C:/Users/Joshua/Documents/rdata/tortdata", labels = 2).
+csv2txt("C:/Users/Joshua/Documents/rdata/tortdata", labels = 2).
 
 This created an individual text file for each document.
 
@@ -163,7 +167,10 @@ basename(comb_files)
 
 comb_files <- c(rr_files,tort_files)
 ```
+##Tokenization
+
 The next step was tokenization. 
+
 ```{r createvocab, cache=TRUE}
 reader <- function(f) {
   require(stringr)
@@ -186,7 +193,11 @@ dtm <- create_dtm(it_tokens, vectorizer)
 rownames(dtm) <- basename(comb_files)
 comb_files
 ```
+
+##Cosinesimilarity 
+
 After creating the dtm, I examined the cosinesimilarity. The histogram shows that the similarity is pretty high. 
+
 ```{r}
 distances <- dist2(dtm[1, , drop = FALSE], dtm[1:367, ])
 distances2 <- distances[1, ] %>% sort()
@@ -198,11 +209,12 @@ similarities <- wordVectors::cosineSimilarity(dtm[1:367, , drop = FALSE],
                                               dtm[1:367, , drop = FALSE])
 similarities %>% View
 
-
-
 ```
 
-Performing a principle component analysis. 
+##Principle Component Analysis
+
+Performing a principle component analysis.
+
 ```{r}
 dtm2 <- as.matrix(dtm)
 
@@ -214,6 +226,8 @@ augment(pca) %>%
 ggplot(aes(.fittedPC1, .fittedPC2)) + 
 geom_point() 
 ```
+
+##K Means
 
 Now I will see if using Kmeans reveals anything.Here I used two clusters to see if it would divide evenly between railroads and torts.This resulted in one cluster having 118 documents and the other 249. This indicates that there is some overlap as there are only 70 tort documents. 
 To check, I needed to compare the 118 files in cluster 1 with the 70 tort documents.
@@ -254,7 +268,9 @@ mixedup <- (which(!tortvector%in%k1vector))
 
 tortvectormx <- tortvector[c(mixedup)]
 ```
-Affinity propogation clustering. 
+
+##Affinity propogation clustering 
+
 ```{r}
 # Affinity propagation clustering
 
